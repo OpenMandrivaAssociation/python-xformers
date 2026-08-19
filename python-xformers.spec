@@ -24,6 +24,7 @@ BuildRequires:	python%{pyver}dist(wheel)
 BuildRequires:	python%{pyver}dist(torch)
 BuildRequires:	python%{pyver}dist(numpy)
 BuildRequires:	hipcc
+BuildRequires:	/usr/bin/clang-offload-bundler
 BuildRequires:	cmake(hip)
 Requires:	python%{pyver}dist(torch)
 Requires:	python%{pyver}dist(numpy)
