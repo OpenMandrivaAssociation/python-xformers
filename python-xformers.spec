@@ -23,7 +23,7 @@ BuildRequires:	python%{pyver}dist(setuptools)
 BuildRequires:	python%{pyver}dist(wheel)
 BuildRequires:	python%{pyver}dist(torch)
 BuildRequires:	python%{pyver}dist(numpy)
-%ifarch x86_64 znver1
+%ifarch %{x86_64}
 BuildRequires:	hipcc
 BuildRequires:	cmake(hip)
 %endif
@@ -32,7 +32,7 @@ Requires:	python%{pyver}dist(numpy)
 
 %description
 xFormers is a collection of optimized transformer components.
-On x86_64/znver1 the HIP flash-attention kernels are compiled when
+On x86_64 the HIP flash-attention kernels are compiled when
 the build-time python-torch is the ROCm build (torch.version.hip).
 aarch64 stays on the portable C++ extension.
 
@@ -47,7 +47,7 @@ export CXX=clang++
 export FORCE_CUDA=0
 export BUILD_VERSION=%{version}
 export TORCH_CUDA_ARCH_LIST=
-%ifarch x86_64 znver1
+%ifarch %{x86_64}
 export ROCM_PATH=%{_prefix}
 export ROCM_HOME=%{_prefix}
 export HIP_CLANG_PATH=%{_bindir}
