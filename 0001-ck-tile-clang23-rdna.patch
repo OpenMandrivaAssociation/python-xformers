@@ -86,6 +86,17 @@
  
  template <>
  struct less_equal<float, float>
+--- a/include/ck_tile/core/numeric/bfloat16.hpp
++++ b/include/ck_tile/core/numeric/bfloat16.hpp
+@@ -97,7 +97,7 @@
+ template <>
+ struct native_t<bfloat16_t>
+ {
+-    using type = ushort;
++    using type = short;
+ };
+ using bf16_t     = bfloat16_t;
+ using bf16_raw_t = typename bf16_t::raw_type;
 --- a/include/ck_tile/core/utility/unary_element_function.hpp
 +++ b/include/ck_tile/core/utility/unary_element_function.hpp
 @@ -47,9 +47,8 @@
@@ -99,6 +110,21 @@
  
  template <typename SaturateType>
  struct saturates
+--- a/include/ck_tile/core/arch/amd_buffer_addressing.hpp
++++ b/include/ck_tile/core/arch/amd_buffer_addressing.hpp
+@@ -82,10 +82,8 @@
+ // TODO: strict aliasing rule seems fail when reinterpret_cast between vector type
+ // (exp_vector_type(xxx))
+ 
+-#define HAS_RAW_BUFFER_BUILTINS                             \
+-    __has_builtin(__builtin_amdgcn_raw_buffer_load_b32) &&  \
+-        __has_builtin(__builtin_amdgcn_make_buffer_rsrc) && \
+-        __has_builtin(__builtin_amdgcn_raw_buffer_store_b32)
++// clang 23 changed raw_buffer_* builtin vector element types (floatxN -> uint32xN).
++#define HAS_RAW_BUFFER_BUILTINS 0
+ 
+ #if HAS_RAW_BUFFER_BUILTINS
+ CK_TILE_DEVICE __amdgpu_buffer_rsrc_t cast_to_amdgpu_buffer_rsrc_t(int32x4_t res)
 --- a/include/ck_tile/ops/fmha/pipeline/block_fmha_bwd_pipeline_default_policy.hpp
 +++ b/include/ck_tile/ops/fmha/pipeline/block_fmha_bwd_pipeline_default_policy.hpp
 @@ -370,6 +370,17 @@
@@ -251,3 +277,25 @@
          constexpr index_t M2 = GetTransposedAlignmentBias<Problem>();
          constexpr index_t M1 = get_warp_size() / N0;
          constexpr index_t M0 = kBlockSize / get_warp_size();
+--- a/include/ck_tile/ops/gemm/warp/warp_gemm_attribute_mfma_impl.hpp
++++ b/include/ck_tile/ops/gemm/warp/warp_gemm_attribute_mfma_impl.hpp
+@@ -1273,7 +1273,8 @@
+                     type_convert<float>(reinterpret_cast<const thread_buffer<BDataType, 8>&>(b_vec)
+                                             .template get_as<BDataType>()[number<k>{}]);
+ 
+-                c_vec = __builtin_amdgcn_mfma_f32_32x32x2f32(a_f32, b_f32, c_vec, 0, 0, 0);
++                c_vec = bit_cast<CVecType>(__builtin_amdgcn_mfma_f32_32x32x2f32(
++                    a_f32, b_f32, bit_cast<fp32x16_t>(c_vec), 0, 0, 0));
+             });
+ #else
+             ck_tile::ignore = c_vec;
+@@ -1590,7 +1591,8 @@
+                     type_convert<float>(reinterpret_cast<const thread_buffer<BDataType, 8>&>(b_vec)
+                                             .template get_as<BDataType>()[number<k>{}]);
+ 
+-                c_vec = __builtin_amdgcn_mfma_f32_32x32x2f32(a_f32, b_f32, c_vec, 0, 0, 0);
++                c_vec = bit_cast<CVecType>(__builtin_amdgcn_mfma_f32_32x32x2f32(
++                    a_f32, b_f32, bit_cast<fp32x16_t>(c_vec), 0, 0, 0));
+             });
+ #else
+             ck_tile::ignore = c_vec;
