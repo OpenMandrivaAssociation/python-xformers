@@ -52,7 +52,8 @@ sed -i 's/torch.version.hip$/torch.version.hip or os.getenv("HIP_ARCHITECTURES")
 # hipcc -Werror turns the c++17 diagnostic into a hard error.
 sed -i 's/-std=c++17/-std=c++20/g' setup.py
 # clang 23 is stricter than the -Werror HIP flags xformers ships.
-sed -i '/"-Werror",/d' setup.py
+# -Wc++11-narrowing is a hard error here and trips on signed bf16.
+sed -i '/"-Werror",/d; /"-Wc++11-narrowing",/d' setup.py
 # Restore the CK Tile tree setup.py expects (PyPI sdist ships only cutlass).
 tar xf %{SOURCE1}
 rm -rf third_party/composable_kernel_tiled

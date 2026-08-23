@@ -88,7 +88,7 @@
  struct less_equal<float, float>
 --- a/include/ck_tile/core/numeric/bfloat16.hpp
 +++ b/include/ck_tile/core/numeric/bfloat16.hpp
-@@ -97,12 +97,12 @@
+@@ -97,14 +97,14 @@
  template <>
  struct native_t<bfloat16_t>
  {
@@ -101,8 +101,11 @@
 -using bfloat16_t = ushort;
 +using bfloat16_t = short;
  using bf16_t     = bfloat16_t;
- using bf16_raw_t = uint16_t;
+-using bf16_raw_t = uint16_t;
++using bf16_raw_t = short;
  #endif
+ // round to nearest
+ CK_TILE_HOST_DEVICE
 --- a/include/ck_tile/core/utility/unary_element_function.hpp
 +++ b/include/ck_tile/core/utility/unary_element_function.hpp
 @@ -47,9 +47,8 @@
