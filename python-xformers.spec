@@ -15,6 +15,8 @@ Group:		Development/Python
 URL:		https://github.com/facebookresearch/xformers
 Source0:	https://files.pythonhosted.org/packages/source/x/xformers/xformers-%{version}.tar.gz
 Source1:	https://github.com/ROCm/composable_kernel/archive/%{ck_commit}.tar.gz#/composable_kernel-%{ck_commit}.tar.gz
+# Not Patch0: BuildSystem python %autosetup would apply it to Source0.
+Source2:	0001-ck-tile-clang23-rdna.patch
 
 BuildSystem:	python
 BuildRequires:	cmake
@@ -49,10 +51,17 @@ sed -i 's/torch.version.hip$/torch.version.hip or os.getenv("HIP_ARCHITECTURES")
 # torch 2.13 AutogradState.h uses C++20 bit-field default initializers;
 # hipcc -Werror turns the c++17 diagnostic into a hard error.
 sed -i 's/-std=c++17/-std=c++20/g' setup.py
+# clang 23 is stricter than the -Werror HIP flags xformers ships.
+sed -i '/"-Werror",/d' setup.py
 # Restore the CK Tile tree setup.py expects (PyPI sdist ships only cutlass).
 tar xf %{SOURCE1}
 rm -rf third_party/composable_kernel_tiled
 mv composable_kernel-%{ck_commit} third_party/composable_kernel_tiled
+# clang 23 rejects __host__/__device__ on deduction guides; RDNA wave32
+# + headdim 256 divided by zero in the June 2025 FMHA bwd policy.
+pushd third_party/composable_kernel_tiled
+patch -p1 < %{SOURCE2}
+popd
 
 %build -p
 export CC=clang
