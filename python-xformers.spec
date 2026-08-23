@@ -76,6 +76,8 @@ export HIP_DEVICE_LIB_PATH=%{_libdir}/amdgcn/bitcode
 export PYTORCH_ROCM_ARCH='gfx906;gfx908;gfx90a;gfx942;gfx1030;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201'
 export HIP_ARCHITECTURES='%{hip_archs}'
 export XFORMERS_CK_FLASH_ATTN=1
+# One hipcc TU already offloads 10 gfx*; ninja -j$nproc OOMs the builder.
+export MAX_JOBS=1
 
 %files
 %doc README.md

@@ -1,4 +1,4 @@
 sources:
   xformers-0.0.35.tar.gz: a314386f2ca4586ace0458cbaa4488c6e022d136
   composable_kernel-50fad035248b154cdfa4505cf5de7465ce146149.tar.gz: 35a8a93b66b8044c1e7efbb60007a0d71e7a4bae
-  0001-ck-tile-clang23-rdna.patch: 123a5ae32b82a7745382069480f6667b1a88bff3
+  0001-ck-tile-clang23-rdna.patch: 38e78ed8f8ed98f93c1293ce1ee126bd4af77c96
