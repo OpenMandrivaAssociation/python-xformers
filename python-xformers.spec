@@ -15,7 +15,7 @@ Group:		Development/Python
 URL:		https://github.com/facebookresearch/xformers
 Source0:	https://files.pythonhosted.org/packages/source/x/xformers/xformers-%{version}.tar.gz
 Source1:	https://github.com/ROCm/composable_kernel/archive/%{ck_commit}.tar.gz#/composable_kernel-%{ck_commit}.tar.gz
-# Not Patch0: BuildSystem python %autosetup would apply it to Source0.
+# Not Patch0: the python buildsystem autosetup would apply it to Source0.
 Source2:	0001-ck-tile-clang23-rdna.patch
 
 BuildSystem:	python
