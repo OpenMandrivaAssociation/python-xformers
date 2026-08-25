@@ -1,6 +1,8 @@
 %undefine _debugsource_packages
 
-# Space-separated: xformers setup.py splits HIP_ARCHITECTURES on whitespace.
+# One HIP subpackage per ISA. Compiling every gfx into one hipcc
+# (10 --offload-arch) OOMs and takes weeks; one arch per job is
+# small enough for ninja -j$nproc.
 %global hip_archs gfx906 gfx908 gfx90a gfx942 gfx1030 gfx1100 gfx1101 gfx1102 gfx1200 gfx1201
 # third_party/composable_kernel_tiled pin from xformers v0.0.35 (.gitmodules).
 # The PyPI sdist omits it; cooker has no composable-kernel package.
@@ -39,10 +41,38 @@ Requires:	python%{pyver}dist(torch)
 Requires:	python%{pyver}dist(numpy)
 
 %description
-xFormers is a collection of optimized transformer components.
-HIP flash-attention kernels are compiled when the build-time
-python-torch is the ROCm build (torch.version.hip). Radeon works
-on x86_64 and aarch64.
+xFormers transformer building blocks. The base package is CPU (and
+uses torch SDPA on any GPU). Optional python-xformers-gfx* packages
+add AOT CK flash-attention for one ISA; install the one that matches
+rocminfo. Several can be installed at once; the loader picks the .so
+for the current device (override with XFORMERS_HIP_ARCH).
+
+# One subpackage per gfx. %%1 is the ISA name (gfx1100, ...).
+%define xformers_gfx() \
+%package %1\
+Summary:	HIP flash-attention for %1\
+Group:		Development/Python\
+Requires:	python-xformers = %{EVRD}\
+\
+%description %1\
+AOT Composable Kernel flash-attention for AMD %1.\
+Install the subpackage that matches rocminfo / torch device arch.\
+Several gfx* subpackages can be installed together.\
+\
+%files %1\
+%{python_sitearch}/xformers/_C_%1.so\
+%{nil}
+
+%xformers_gfx gfx906
+%xformers_gfx gfx908
+%xformers_gfx gfx90a
+%xformers_gfx gfx942
+%xformers_gfx gfx1030
+%xformers_gfx gfx1100
+%xformers_gfx gfx1101
+%xformers_gfx gfx1102
+%xformers_gfx gfx1200
+%xformers_gfx gfx1201
 
 %prep -a
 # setup.py only enables HIP if torch.version.hip is set. Also honour
@@ -63,6 +93,37 @@ mv composable_kernel-%{ck_commit} third_party/composable_kernel_tiled
 pushd third_party/composable_kernel_tiled
 patch -p1 < %{SOURCE2}
 popd
+# Load xformers/_C_<gfx>.so for the current HIP device.
+python - <<'PY'
+from pathlib import Path
+p = Path("xformers/_cpp_lib.py")
+t = p.read_text()
+old = '''    extfinder = importlib.machinery.FileFinder(lib_dir, loader_details)
+    if torch.version.hip and not hasattr(torch.version, "git_version"):
+        ext_specs = extfinder.find_spec("_C_hip")
+    else:
+        ext_specs = extfinder.find_spec("_C")
+'''
+new = '''    extfinder = importlib.machinery.FileFinder(lib_dir, loader_details)
+    ext_specs = None
+    gfx = os.environ.get("XFORMERS_HIP_ARCH", "").strip().split()[:1]
+    gfx = gfx[0] if gfx else ""
+    if not gfx and getattr(torch.version, "hip", None) and torch.cuda.is_available():
+        try:
+            gfx = torch.cuda.get_device_properties(0).gcnArchName.split(":")[0]
+        except Exception:
+            gfx = ""
+    if gfx:
+        ext_specs = extfinder.find_spec("_C_" + gfx)
+    if ext_specs is None and torch.version.hip and not hasattr(torch.version, "git_version"):
+        ext_specs = extfinder.find_spec("_C_hip")
+    if ext_specs is None:
+        ext_specs = extfinder.find_spec("_C")
+'''
+if old not in t:
+    raise SystemExit("xformers/_cpp_lib.py loader block not found")
+p.write_text(t.replace(old, new, 1))
+PY
 
 %build -p
 export CC=clang
@@ -74,14 +135,39 @@ export ROCM_PATH=%{_prefix}
 export ROCM_HOME=%{_prefix}
 export HIP_CLANG_PATH=%{_bindir}
 export HIP_DEVICE_LIB_PATH=%{_libdir}/amdgcn/bitcode
-export PYTORCH_ROCM_ARCH='gfx906;gfx908;gfx90a;gfx942;gfx1030;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201'
-export HIP_ARCHITECTURES='%{hip_archs}'
+# Default %%py_build is CPU-only (torch SDPA on any GPU).
+export HIP_ARCHITECTURES=
+export XFORMERS_CK_FLASH_ATTN=0
+export MAX_JOBS=${RPM_BUILD_NCPUS:-$(nproc)}
+
+%build -a
+# One hipcc ISA at a time so ninja can use all cores without OOM.
+mkdir -p hip-libs
 export XFORMERS_CK_FLASH_ATTN=1
-# One hipcc TU already offloads 10 gfx*; ninja -j$nproc OOMs the builder.
-export MAX_JOBS=1
+for gfx in %{hip_archs}; do
+	rm -rf build hip-w hip-tmp
+	export HIP_ARCHITECTURES="$gfx"
+	export PYTORCH_ROCM_ARCH="$gfx"
+	# pip wheel (pyproject) does not leave build/_C.so; pull it out of the wheel.
+	python -m pip wheel --no-deps --no-build-isolation --verbose -w hip-w .
+	python -c 'import glob,shutil,sys,zipfile,os; gfx=sys.argv[1]; ws=glob.glob("hip-w/*.whl");
+assert ws, "no HIP wheel for "+gfx
+z=zipfile.ZipFile(ws[0]); ns=[n for n in z.namelist() if n.endswith("_C.so")];
+assert ns, "no _C.so in "+ws[0]
+z.extract(ns[0],"hip-tmp"); os.makedirs("hip-libs",exist_ok=True)
+shutil.move("hip-tmp/"+ns[0],"hip-libs/_C_%s.so"%gfx)' "$gfx"
+done
+# Leave a CPU tree so %%py_install packages the base module, not the last HIP build.
+rm -rf build hip-w hip-tmp
+export HIP_ARCHITECTURES=
+export XFORMERS_CK_FLASH_ATTN=0
+
+%install -a
+install -m 755 hip-libs/_C_gfx*.so %{buildroot}%{python_sitearch}/xformers/
 
 %files
 %doc README.md
 %license LICENSE
 %{python_sitearch}/xformers
+%exclude %{python_sitearch}/xformers/_C_gfx*.so
 %{python_sitearch}/xformers-*.*-info
