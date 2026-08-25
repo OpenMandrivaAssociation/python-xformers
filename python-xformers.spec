@@ -43,36 +43,39 @@ Requires:	python%{pyver}dist(numpy)
 %description
 xFormers transformer building blocks. The base package is CPU (and
 uses torch SDPA on any GPU). Optional python-xformers-gfx* packages
-add AOT CK flash-attention for one ISA; install the one that matches
-rocminfo. Several can be installed at once; the loader picks the .so
-for the current device (override with XFORMERS_HIP_ARCH).
+add AOT CK flash-attention for one target ISA. Every builder compiles
+every ISA; pick the subpackage for the GPU that will run the code
+(gfx1100 on a 7900 box, gfx942 on MI300, ...). The installed RPM is
+what counts, not rocminfo on the builder. If several gfx* packages
+are installed, the loader matches the live device; XFORMERS_HIP_ARCH
+overrides.
 
-# One subpackage per gfx. %%1 is the ISA name (gfx1100, ...).
+# One subpackage per gfx. %%1 = ISA, %%2 = short GPU hint (no spaces).
 %define xformers_gfx() \
 %package %1\
-Summary:	HIP flash-attention for %1\
+Summary:	HIP flash-attention for %1 (%2)\
 Group:		Development/Python\
 Requires:	python-xformers = %{EVRD}\
 \
 %description %1\
-AOT Composable Kernel flash-attention for AMD %1.\
-Install the subpackage that matches rocminfo / torch device arch.\
-Several gfx* subpackages can be installed together.\
+AOT Composable Kernel flash-attention for %1 (%2).\
+Produced on every host architecture; install this on machines whose\
+GPU is %1. The builder's GPU is irrelevant.\
 \
 %files %1\
 %{python_sitearch}/xformers/_C_%1.so\
 %{nil}
 
-%xformers_gfx gfx906
-%xformers_gfx gfx908
-%xformers_gfx gfx90a
-%xformers_gfx gfx942
-%xformers_gfx gfx1030
-%xformers_gfx gfx1100
-%xformers_gfx gfx1101
-%xformers_gfx gfx1102
-%xformers_gfx gfx1200
-%xformers_gfx gfx1201
+%xformers_gfx gfx906 Vega20/MI50
+%xformers_gfx gfx908 CDNA1/MI100
+%xformers_gfx gfx90a CDNA2/MI200
+%xformers_gfx gfx942 CDNA3/MI300
+%xformers_gfx gfx1030 RDNA2/RX6800
+%xformers_gfx gfx1100 RDNA3/RX7900
+%xformers_gfx gfx1101 RDNA3/RX7800
+%xformers_gfx gfx1102 RDNA3/RX7600
+%xformers_gfx gfx1200 RDNA4/RX9070
+%xformers_gfx gfx1201 RDNA4/RX9070XT
 
 %prep -a
 # setup.py only enables HIP if torch.version.hip is set. Also honour
@@ -93,7 +96,8 @@ mv composable_kernel-%{ck_commit} third_party/composable_kernel_tiled
 pushd third_party/composable_kernel_tiled
 patch -p1 < %{SOURCE2}
 popd
-# Load xformers/_C_<gfx>.so for the current HIP device.
+# Load the _C_<gfx>.so from the installed RPM. Builders have no
+# target GPU: one gfx* package => that ISA; several => live device.
 python - <<'PY'
 from pathlib import Path
 p = Path("xformers/_cpp_lib.py")
@@ -108,9 +112,22 @@ new = '''    extfinder = importlib.machinery.FileFinder(lib_dir, loader_details)
     ext_specs = None
     gfx = os.environ.get("XFORMERS_HIP_ARCH", "").strip().split()[:1]
     gfx = gfx[0] if gfx else ""
-    if not gfx and getattr(torch.version, "hip", None) and torch.cuda.is_available():
+    installed = []
+    try:
+        installed = sorted(
+            n[3:-3]
+            for n in os.listdir(lib_dir)
+            if n.startswith("_C_gfx") and n.endswith(".so")
+        )
+    except OSError:
+        installed = []
+    if not gfx and len(installed) == 1:
+        gfx = installed[0]
+    if not gfx and len(installed) > 1 and getattr(torch.version, "hip", None) and torch.cuda.is_available():
         try:
-            gfx = torch.cuda.get_device_properties(0).gcnArchName.split(":")[0]
+            want = torch.cuda.get_device_properties(0).gcnArchName.split(":")[0]
+            if want in installed:
+                gfx = want
         except Exception:
             gfx = ""
     if gfx:
