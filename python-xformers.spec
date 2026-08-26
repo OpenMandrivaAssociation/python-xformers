@@ -1,4 +1,7 @@
 %undefine _debugsource_packages
+# CK instance TUs are already multi-GB; -flto on the host objects
+# (and at link of ~640 of them) OOMs the builders.
+%define _disable_lto 1
 
 # One HIP subpackage per ISA. Compiling every gfx into one hipcc
 # (--offload-arch A --offload-arch B) OOMs; one arch per job is
