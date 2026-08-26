@@ -10,7 +10,7 @@
 # ISA list = clang amdgcn -mcpu=help ∩ device-lib
 # oclc_isa_version_*.bc (not the builder's GPU). New families
 # (gfx1500 / RDNA6, …) appear automatically when both LLVM and
-# rocm-device-libs grow the matching files. %hip_archs_skip
+# rocm-device-libs grow the matching files. %%hip_archs_skip
 # drops an ISA if CK cannot compile it yet.
 %{lua:
 local fallback = {"gfx906","gfx908","gfx90a","gfx942","gfx1030","gfx1100","gfx1101","gfx1102","gfx1200","gfx1201"}
@@ -156,7 +156,7 @@ end
 %prep -a
 # Do not rewrite the torch.version.hip gate: `or` binds looser than
 # `and`, so a sloppy sed made CK flash-attn compile during the CPU
-# %py_build (MAX_JOBS=nproc → 32 hipccs → OOM). Upstream already
+# %%py_build (MAX_JOBS=nproc, 32 hipccs, OOM). Upstream already
 # honours HIP_ARCHITECTURES as the third clause of that condition.
 # torch 2.13 AutogradState.h uses C++20 bit-field default initializers;
 # hipcc -Werror turns the c++17 diagnostic into a hard error.
