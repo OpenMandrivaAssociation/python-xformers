@@ -151,9 +151,10 @@ end
 }
 
 %prep -a
-# setup.py only enables HIP if torch.version.hip is set. Also honour
-# HIP_ARCHITECTURES so a ROCm toolchain can be selected explicitly.
-sed -i 's/torch.version.hip$/torch.version.hip or os.getenv("HIP_ARCHITECTURES")/' setup.py
+# Do not rewrite the torch.version.hip gate: `or` binds looser than
+# `and`, so a sloppy sed made CK flash-attn compile during the CPU
+# %py_build (MAX_JOBS=nproc → 32 hipccs → OOM). Upstream already
+# honours HIP_ARCHITECTURES as the third clause of that condition.
 # torch 2.13 AutogradState.h uses C++20 bit-field default initializers;
 # hipcc -Werror turns the c++17 diagnostic into a hard error.
 sed -i 's/-std=c++17/-std=c++20/g' setup.py
@@ -226,14 +227,23 @@ export ROCM_HOME=%{_prefix}
 export HIP_CLANG_PATH=%{_bindir}
 export HIP_DEVICE_LIB_PATH=%{_libdir}/amdgcn/bitcode
 # Default %%py_build is CPU-only (torch SDPA on any GPU).
-export HIP_ARCHITECTURES=
+unset HIP_ARCHITECTURES
+unset PYTORCH_ROCM_ARCH
 export XFORMERS_CK_FLASH_ATTN=0
 export MAX_JOBS=${RPM_BUILD_NCPUS:-$(nproc)}
 
 %build -a
-# One hipcc ISA at a time so ninja can use all cores without OOM.
+# One ISA per hipcc, and only a few hipccs at once. A single CK
+# instance TU is multi-GB; ninja -j$nproc still OOMs.
 mkdir -p hip-libs
 export XFORMERS_CK_FLASH_ATTN=1
+mem_kb=$(awk '/MemTotal/{print $2}' /proc/meminfo)
+hip_jobs=$(( mem_kb / 12582912 ))
+[ "$hip_jobs" -lt 1 ] && hip_jobs=1
+[ "$hip_jobs" -gt 4 ] && hip_jobs=4
+export MAX_JOBS=$hip_jobs
+export CMAKE_BUILD_PARALLEL_LEVEL=$hip_jobs
+echo "HIP ninja jobs=$hip_jobs (MemTotal ${mem_kb} kB)"
 for gfx in %{hip_archs}; do
 	rm -rf build hip-w hip-tmp
 	export HIP_ARCHITECTURES="$gfx"
