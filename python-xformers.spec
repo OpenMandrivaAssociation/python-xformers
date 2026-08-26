@@ -13,7 +13,7 @@
 # rocm-device-libs grow the matching files. %%hip_archs_skip
 # drops an ISA if CK cannot compile it yet.
 %{lua:
-local fallback = {"gfx1200","gfx1201","gfx1100","gfx1101","gfx1102","gfx1030","gfx906","gfx908","gfx90a","gfx942"}
+local fallback = {"gfx906","gfx908","gfx90a","gfx942","gfx1030","gfx1100","gfx1101","gfx1102","gfx1200","gfx1201"}
 local function exists(p)
 	local f = io.open(p, "r")
 	if f then f:close() return true end
@@ -63,30 +63,7 @@ for name, _ in pairs(cpus) do
 	end
 end
 if #list == 0 then list = fallback end
--- Sequential ISAs do not cost extra RAM. Build the packager's
--- card first (RX 9060 XT = gfx1200) so a timeout still yields
--- a usable RPM; then the rest of RDNA4+, then older families.
-local function pri(name)
-	if name == "gfx1200" then return 0 end
-	local rest = name:sub(4)
-	local fam
-	if rest:match("^1[0-9]") and #rest >= 4 then
-		fam = tonumber(rest:sub(1,2))
-	else
-		fam = tonumber(rest:sub(1,1))
-	end
-	if not fam then return 50 end
-	if fam >= 13 then return 1 end
-	if fam == 12 then return 2 end
-	if fam == 11 then return 3 end
-	if fam == 10 then return 4 end
-	return 5
-end
-table.sort(list, function(a,b)
-	local pa, pb = pri(a), pri(b)
-	if pa ~= pb then return pa < pb end
-	return isa_num(a) < isa_num(b)
-end)
+table.sort(list, function(a,b) return isa_num(a) < isa_num(b) end)
 rpm.define("hip_archs " .. table.concat(list, " "))
 }
 # third_party/composable_kernel_tiled pin from xformers v0.0.35 (.gitmodules).
