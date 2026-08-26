@@ -236,17 +236,16 @@ export XFORMERS_CK_FLASH_ATTN=0
 export MAX_JOBS=${RPM_BUILD_NCPUS:-$(nproc)}
 
 %build -a
-# One ISA per hipcc, and only a few hipccs at once. A single CK
-# instance TU is multi-GB; ninja -j$nproc still OOMs.
+# One ISA per hipcc, and only one hipcc at a time. A single CK
+# instance TU is multi-GB; even 2-4 in parallel OOMs a 64G box.
+# Official xformers says the same (README: MAX_JOBS=2 if the
+# source build OOMs). They ship wheels; they do not distro-build
+# 640 TUs x N gfx on a desktop.
 mkdir -p hip-libs
 export XFORMERS_CK_FLASH_ATTN=1
-mem_kb=$(awk '/MemTotal/{print $2}' /proc/meminfo)
-hip_jobs=$(( mem_kb / 12582912 ))
-[ "$hip_jobs" -lt 1 ] && hip_jobs=1
-[ "$hip_jobs" -gt 4 ] && hip_jobs=4
-export MAX_JOBS=$hip_jobs
-export CMAKE_BUILD_PARALLEL_LEVEL=$hip_jobs
-echo "HIP ninja jobs=$hip_jobs (MemTotal ${mem_kb} kB)"
+export MAX_JOBS=1
+export CMAKE_BUILD_PARALLEL_LEVEL=1
+echo "HIP ninja jobs=1"
 for gfx in %{hip_archs}; do
 	rm -rf build hip-w hip-tmp
 	export HIP_ARCHITECTURES="$gfx"
