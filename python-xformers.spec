@@ -249,15 +249,15 @@ export MAX_JOBS=${RPM_BUILD_NCPUS:-$(nproc)}
 # One ISA per hipcc, and only one hipcc at a time. Official
 # wheels: HIP_ARCHITECTURES='gfx90a gfx942' MAX_JOBS=2 Release
 # on a 16-core/64G GitHub runner — not 11 gfx x nproc x -g3.
-mkdir -p hip-libs
+mkdir -p hip-libs hip-bin hip-py
 export XFORMERS_CK_FLASH_ATTN=1
 export MAX_JOBS=1
 export CMAKE_BUILD_PARALLEL_LEVEL=1
-# Torch/pip look up ninja by absolute /usr/bin/ninja, so a PATH
-# wrapper never ran. Replace the buildroot binary (mock only).
-if [ ! -x /usr/bin/ninja.real ]; then
-	mv /usr/bin/ninja /usr/bin/ninja.real
-	cat > /usr/bin/ninja <<'EOF'
+export MAKEFLAGS=-j1
+# Build user cannot replace /usr/bin/ninja. Torch starts ninja via
+# subprocess (sometimes with an absolute path), so hook Popen and
+# also put a PATH wrapper first for the basename lookup.
+cat > hip-bin/ninja <<'EOF'
 #!/bin/sh
 args=
 skip=
@@ -269,14 +269,45 @@ for a in "$@"; do
 	case $a in
 	-j) skip=1 ;;
 	-j*) ;;
+	--jobs) skip=1 ;;
+	--jobs=*) ;;
 	*) args="$args $a" ;;
 	esac
 done
-exec /usr/bin/ninja.real -j1 $args
+exec /usr/bin/ninja -j1 $args
 EOF
-	chmod +x /usr/bin/ninja
-fi
-echo "HIP ninja=$(command -v ninja) -> $(/usr/bin/ninja --version) forced -j1"
+chmod +x hip-bin/ninja
+export PATH="$PWD/hip-bin:$PATH"
+cat > hip-py/sitecustomize.py <<'EOF'
+import os
+import subprocess
+_real = subprocess.Popen
+def _popen(args, **kw):
+	if isinstance(args, (list, tuple)) and args:
+		a0 = str(args[0])
+		base = os.path.basename(a0)
+		if base == "ninja":
+			out = [a0, "-j1"]
+			skip = False
+			for a in list(args)[1:]:
+				if skip:
+					skip = False
+					continue
+				s = str(a)
+				if s in ("-j", "--jobs"):
+					skip = True
+					continue
+				if s.startswith("-j") and s[2:].isdigit():
+					continue
+				if s.startswith("--jobs="):
+					continue
+				out.append(a)
+			args = out
+	return _real(args, **kw)
+subprocess.Popen = _popen
+EOF
+export PYTHONPATH="$PWD/hip-py${PYTHONPATH:+:$PYTHONPATH}"
+echo "HIP ninja wrapper $PWD/hip-bin/ninja PYTHONPATH=$PYTHONPATH"
 for gfx in %{hip_archs}; do
 	rm -rf build hip-w hip-tmp
 	export HIP_ARCHITECTURES="$gfx"
