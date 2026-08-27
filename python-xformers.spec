@@ -241,11 +241,33 @@ export MAX_JOBS=${RPM_BUILD_NCPUS:-$(nproc)}
 # Official xformers says the same (README: MAX_JOBS=2 if the
 # source build OOMs). They ship wheels; they do not distro-build
 # 640 TUs x N gfx on a desktop.
-mkdir -p hip-libs
+mkdir -p hip-libs hip-bin
 export XFORMERS_CK_FLASH_ATTN=1
 export MAX_JOBS=1
 export CMAKE_BUILD_PARALLEL_LEVEL=1
-echo "HIP ninja jobs=1"
+# Torch only adds ninja -j$MAX_JOBS if the env is a digit; mock
+# still leaves ninja free to use every core when that is missed.
+# A wrapper is the only reliable -j1.
+cat > hip-bin/ninja <<'EOF'
+#!/bin/sh
+args=
+skip=
+for a in "$@"; do
+	if [ -n "$skip" ]; then
+		skip=
+		continue
+	fi
+	case $a in
+	-j) skip=1 ;;
+	-j*) ;;
+	*) args="$args $a" ;;
+	esac
+done
+exec /usr/bin/ninja -j1 $args
+EOF
+chmod +x hip-bin/ninja
+export PATH="$PWD/hip-bin:$PATH"
+echo "HIP ninja jobs=1 (wrapper $PWD/hip-bin/ninja)"
 for gfx in %{hip_archs}; do
 	rm -rf build hip-w hip-tmp
 	export HIP_ARCHITECTURES="$gfx"
