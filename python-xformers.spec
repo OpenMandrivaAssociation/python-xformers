@@ -2,6 +2,9 @@
 # CK instance TUs are already multi-GB; -flto on the host objects
 # (and at link of ~640 of them) OOMs the builders.
 %define _disable_lto 1
+# Official wheels are XFORMERS_BUILD_TYPE=Release with no distro -g3.
+# Keep a little debug (-g1) so a crash is still usable.
+%global optflags %(echo %{optflags} | sed 's/-g3/-g1/g')
 
 # One HIP subpackage per ISA. Compiling every gfx into one hipcc
 # (--offload-arch A --offload-arch B) OOMs; one arch per job is
@@ -229,6 +232,13 @@ export ROCM_PATH=%{_prefix}
 export ROCM_HOME=%{_prefix}
 export HIP_CLANG_PATH=%{_bindir}
 export HIP_DEVICE_LIB_PATH=%{_libdir}/amdgcn/bitcode
+export XFORMERS_BUILD_TYPE=Release
+# CFLAGS from the environment can still carry -g3 if %%set_build_flags
+# ran before our optflags rewrite.
+for v in CFLAGS CXXFLAGS RPM_OPT_FLAGS LDFLAGS; do
+	eval "val=\${$v-}"
+	eval "export $v=\$(echo \"\$val\" | sed 's/-g3/-g1/g')"
+done
 # Default %%py_build is CPU-only (torch SDPA on any GPU).
 unset HIP_ARCHITECTURES
 unset PYTORCH_ROCM_ARCH
@@ -236,19 +246,18 @@ export XFORMERS_CK_FLASH_ATTN=0
 export MAX_JOBS=${RPM_BUILD_NCPUS:-$(nproc)}
 
 %build -a
-# One ISA per hipcc, and only one hipcc at a time. A single CK
-# instance TU is multi-GB; even 2-4 in parallel OOMs a 64G box.
-# Official xformers says the same (README: MAX_JOBS=2 if the
-# source build OOMs). They ship wheels; they do not distro-build
-# 640 TUs x N gfx on a desktop.
-mkdir -p hip-libs hip-bin
+# One ISA per hipcc, and only one hipcc at a time. Official
+# wheels: HIP_ARCHITECTURES='gfx90a gfx942' MAX_JOBS=2 Release
+# on a 16-core/64G GitHub runner — not 11 gfx x nproc x -g3.
+mkdir -p hip-libs
 export XFORMERS_CK_FLASH_ATTN=1
 export MAX_JOBS=1
 export CMAKE_BUILD_PARALLEL_LEVEL=1
-# Torch only adds ninja -j$MAX_JOBS if the env is a digit; mock
-# still leaves ninja free to use every core when that is missed.
-# A wrapper is the only reliable -j1.
-cat > hip-bin/ninja <<'EOF'
+# Torch/pip look up ninja by absolute /usr/bin/ninja, so a PATH
+# wrapper never ran. Replace the buildroot binary (mock only).
+if [ ! -x /usr/bin/ninja.real ]; then
+	mv /usr/bin/ninja /usr/bin/ninja.real
+	cat > /usr/bin/ninja <<'EOF'
 #!/bin/sh
 args=
 skip=
@@ -263,11 +272,11 @@ for a in "$@"; do
 	*) args="$args $a" ;;
 	esac
 done
-exec /usr/bin/ninja -j1 $args
+exec /usr/bin/ninja.real -j1 $args
 EOF
-chmod +x hip-bin/ninja
-export PATH="$PWD/hip-bin:$PATH"
-echo "HIP ninja jobs=1 (wrapper $PWD/hip-bin/ninja)"
+	chmod +x /usr/bin/ninja
+fi
+echo "HIP ninja=$(command -v ninja) -> $(/usr/bin/ninja --version) forced -j1"
 for gfx in %{hip_archs}; do
 	rm -rf build hip-w hip-tmp
 	export HIP_ARCHITECTURES="$gfx"
