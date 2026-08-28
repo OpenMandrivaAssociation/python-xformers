@@ -167,6 +167,10 @@ sed -i 's/-std=c++17/-std=c++20/g' setup.py
 # clang 23 is stricter than the -Werror HIP flags xformers ships.
 # -Wc++11-narrowing is a hard error here and trips on signed bf16.
 sed -i '/"-Werror",/d; /"-Wc++11-narrowing",/d' setup.py
+# hipcc defaults to -foffload-lto=full for the device clang -cc1;
+# one CK instance then sits at ~14G RSS. Official wheels still
+# compile; they just do not also LTO LLVM on the same 64G box.
+sed -i 's/"-DCK_TILE_FMHA_FWD_FAST_EXP2=1",/"-DCK_TILE_FMHA_FWD_FAST_EXP2=1", "-fno-offload-lto",/' setup.py
 # Restore the CK Tile tree setup.py expects (PyPI sdist ships only cutlass).
 tar xf %{SOURCE1}
 rm -rf third_party/composable_kernel_tiled
@@ -254,6 +258,7 @@ export XFORMERS_CK_FLASH_ATTN=1
 export MAX_JOBS=1
 export CMAKE_BUILD_PARALLEL_LEVEL=1
 export MAKEFLAGS=-j1
+export HIPCC_COMPILE_FLAGS_APPEND="${HIPCC_COMPILE_FLAGS_APPEND:+$HIPCC_COMPILE_FLAGS_APPEND }-fno-offload-lto"
 # Build user cannot replace /usr/bin/ninja. Torch starts ninja via
 # subprocess (sometimes with an absolute path), so hook Popen and
 # also put a PATH wrapper first for the basename lookup.
