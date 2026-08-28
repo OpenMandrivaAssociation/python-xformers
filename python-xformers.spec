@@ -171,6 +171,24 @@ sed -i '/"-Werror",/d; /"-Wc++11-narrowing",/d' setup.py
 # one CK instance then sits at ~14G RSS. Official wheels still
 # compile; they just do not also LTO LLVM on the same 64G box.
 sed -i 's/"-DCK_TILE_FMHA_FWD_FAST_EXP2=1",/"-DCK_TILE_FMHA_FWD_FAST_EXP2=1", "-fno-offload-lto",/' setup.py
+# Pin MAX_JOBS inside setup.py so the PEP 517 hook process sees it.
+# pip wheel compiles in a fresh interpreter; export MAX_JOBS=1 in the
+# spec does not reach torch's ninja -j, and 14G x 34 hipccs OOMs the box.
+python - <<'PY'
+from pathlib import Path
+p = Path("setup.py")
+t = p.read_text()
+needle = "import os\n"
+insert = (
+	"import os\n"
+	"if os.environ.get(\"HIP_ARCHITECTURES\"):\n"
+	"    os.environ[\"MAX_JOBS\"] = \"1\"\n"
+)
+if needle not in t:
+	raise SystemExit("setup.py import os not found")
+if 'os.environ["MAX_JOBS"]' not in t:
+	p.write_text(t.replace(needle, insert, 1))
+PY
 # Restore the CK Tile tree setup.py expects (PyPI sdist ships only cutlass).
 tar xf %{SOURCE1}
 rm -rf third_party/composable_kernel_tiled
