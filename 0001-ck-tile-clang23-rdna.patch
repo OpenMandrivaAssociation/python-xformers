@@ -453,7 +453,7 @@
 
 --- a/include/ck_tile/core/arch/arch.hpp
 +++ b/include/ck_tile/core/arch/arch.hpp
-@@ -51,8 +51,16 @@
+@@ -51,10 +51,16 @@
  
  CK_TILE_HOST_DEVICE constexpr index_t get_warp_size()
  {
@@ -469,21 +469,5 @@
  #else
      return 32;
  #endif
---- a/include/ck_tile/core/arch/arch_hip.hpp
-+++ b/include/ck_tile/core/arch/arch_hip.hpp
-@@ -53,8 +53,16 @@
+ }
  
- CK_TILE_HOST_DEVICE constexpr index_t get_warp_size()
- {
--#if defined(__GFX9__) || !defined(__HIP_DEVICE_COMPILE__)
-+    // Host compilation does not see __GFX9__/__GFX12__. CK's default
-+    // (!__HIP_DEVICE_COMPILE__ → 64) makes host kentry<256,N> while
-+    // wave32 device code emits kentry<128,N>. One-ISA builds pass
-+    // -DCK_TILE_WARP_SIZE=32|64 so both sides agree.
-+#if defined(CK_TILE_WARP_SIZE)
-+    return CK_TILE_WARP_SIZE;
-+#elif defined(__GFX9__) || !defined(__HIP_DEVICE_COMPILE__)
-     return 64;
- #else
-     return 32;
- #endif
