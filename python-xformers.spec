@@ -2,13 +2,16 @@
 # CK instance TUs are already multi-GB; -flto on the host objects
 # (and at link of ~640 of them) OOMs the builders.
 %define _disable_lto 1
+# Instance TUs ~1–2 GB; 10 stay inside 64G. Fat dispatchers peaked
+# at 5.3 GB — do not raise this until those are cheaper.
+%global hip_jobs 10
 # Official wheels are XFORMERS_BUILD_TYPE=Release with no distro -g3.
 # Keep a little debug (-g1) so a crash is still usable.
 %global optflags %(echo %{optflags} | sed 's/-g3/-g1/g')
 
 # One HIP subpackage per ISA. Compiling every gfx into one hipcc
 # (--offload-arch A --offload-arch B) OOMs; one arch per job is
-# small enough for ninja -j$nproc.
+# small enough for ninja -j%%{hip_jobs}.
 #
 # ISA list = clang amdgcn -mcpu=help ∩ device-lib
 # oclc_isa_version_*.bc (not the builder's GPU). New families
@@ -167,13 +170,62 @@ sed -i 's/-std=c++17/-std=c++20/g' setup.py
 # clang 23 is stricter than the -Werror HIP flags xformers ships.
 # -Wc++11-narrowing is a hard error here and trips on signed bf16.
 sed -i '/"-Werror",/d; /"-Wc++11-narrowing",/d' setup.py
-# hipcc defaults to -foffload-lto=full for the device clang -cc1;
-# one CK instance then sits at ~14G RSS. Official wheels still
-# compile; they just do not also LTO LLVM on the same 64G box.
-sed -i 's/"-DCK_TILE_FMHA_FWD_FAST_EXP2=1",/"-DCK_TILE_FMHA_FWD_FAST_EXP2=1", "-fno-offload-lto",/' setup.py
+# -amdgpu-early-inline-all + -amdgpu-function-calls=false is LLVM
+# issue 86332 (8× device memory). On clang 23 a dispatcher TU
+# (ck_tiled_fmha_batched_backward_bf16.hip) hit 37 GB RSS in 7 min
+# and was still growing. Official wheels do not need these flags
+# to finish.
+python - <<'PY'
+from pathlib import Path
+p = Path("setup.py")
+t = p.read_text()
+for flag in (
+	'\n            "-mllvm",\n            "-amdgpu-early-inline-all=true",',
+	'\n            "-mllvm",\n            "-amdgpu-function-calls=false",',
+):
+	if flag not in t:
+		raise SystemExit("setup.py missing HIP mllvm flag to strip")
+	t = t.replace(flag, "", 1)
+if "amdgpu-early-inline-all" in t or "amdgpu-function-calls" in t:
+	raise SystemExit("setup.py still has early-inline / no-function-calls")
+p.write_text(t)
+PY
+# Host get_warp_size() is 64 unless told otherwise. Wave32 device
+# code emits kentry<128,N>; the host then launches kentry<256,N>
+# and HIP cannot find the symbol. One ISA per hipcc.
+python - <<'PY'
+from pathlib import Path
+p = Path("setup.py")
+t = p.read_text()
+needle = '''        arch_list = os.getenv("HIP_ARCHITECTURES", "native").split()
+
+        offload_compress_flag = []
+'''
+insert = '''        arch_list = os.getenv("HIP_ARCHITECTURES", "native").split()
+        wave32 = wave64 = False
+        for _a in arch_list:
+            _a = _a.split(":")[0]
+            if _a.startswith("gfx9"):
+                wave64 = True
+            elif _a.startswith(("gfx10", "gfx11", "gfx12", "gfx13")):
+                wave32 = True
+        if wave32 and wave64:
+            raise SystemExit(
+                "HIP_ARCHITECTURES mixes wave32 and wave64; build one ISA at a time"
+            )
+        cc_flag += [f"-DCK_TILE_WARP_SIZE={32 if wave32 else 64}"]
+        extra_compile_args["cxx"].append(f"-DCK_TILE_WARP_SIZE={32 if wave32 else 64}")
+
+        offload_compress_flag = []
+'''
+if needle not in t:
+    raise SystemExit("setup.py arch_list block not found")
+if "CK_TILE_WARP_SIZE" not in t:
+    p.write_text(t.replace(needle, insert, 1))
+PY
 # Pin MAX_JOBS inside setup.py so the PEP 517 hook process sees it.
-# pip wheel compiles in a fresh interpreter; export MAX_JOBS=1 in the
-# spec does not reach torch's ninja -j, and 14G x 34 hipccs OOMs the box.
+# pip wheel compiles in a fresh interpreter; export MAX_JOBS in the
+# spec does not reach torch's ninja -j.
 python - <<'PY'
 from pathlib import Path
 p = Path("setup.py")
@@ -182,7 +234,7 @@ needle = "import os\n"
 insert = (
 	"import os\n"
 	"if os.environ.get(\"HIP_ARCHITECTURES\"):\n"
-	"    os.environ[\"MAX_JOBS\"] = \"1\"\n"
+	"    os.environ[\"MAX_JOBS\"] = \"%{hip_jobs}\"\n"
 )
 if needle not in t:
 	raise SystemExit("setup.py import os not found")
@@ -194,7 +246,8 @@ tar xf %{SOURCE1}
 rm -rf third_party/composable_kernel_tiled
 mv composable_kernel-%{ck_commit} third_party/composable_kernel_tiled
 # clang 23 rejects __host__/__device__ on deduction guides; RDNA wave32
-# + headdim 256 divided by zero in the June 2025 FMHA bwd policy.
+# + headdim 256 divided by zero in the June 2025 FMHA bwd policy;
+# raw_buffer_* builtins need bit_cast to uint32 vectors (not gfx9 asm).
 pushd third_party/composable_kernel_tiled
 patch -p1 < %{SOURCE2}
 popd
@@ -268,40 +321,44 @@ export XFORMERS_CK_FLASH_ATTN=0
 export MAX_JOBS=${RPM_BUILD_NCPUS:-$(nproc)}
 
 %build -a
-# One ISA per hipcc, and only one hipcc at a time. Official
-# wheels: HIP_ARCHITECTURES='gfx90a gfx942' MAX_JOBS=2 Release
-# on a 16-core/64G GitHub runner — not 11 gfx x nproc x -g3.
+# One ISA per hipcc. Official wheels: HIP_ARCHITECTURES='gfx90a
+# gfx942' MAX_JOBS=2 Release on a 16-core/64G runner.
 mkdir -p hip-libs hip-bin hip-py
 export XFORMERS_CK_FLASH_ATTN=1
-export MAX_JOBS=1
-export CMAKE_BUILD_PARALLEL_LEVEL=1
-export MAKEFLAGS=-j1
-export HIPCC_COMPILE_FLAGS_APPEND="${HIPCC_COMPILE_FLAGS_APPEND:+$HIPCC_COMPILE_FLAGS_APPEND }-fno-offload-lto"
+export MAX_JOBS=%{hip_jobs}
+export CMAKE_BUILD_PARALLEL_LEVEL=%{hip_jobs}
+export MAKEFLAGS=-j%{hip_jobs}
+# Device LTO writes multi-GB temps. /tmp is a 32G tmpfs and is
+# often already full; keep those files on the build disk.
+mkdir -p %{_builddir}/hip-tmp
+export TMPDIR=%{_builddir}/hip-tmp
+export TEMP=$TMPDIR
+export TMP=$TMPDIR
 # Build user cannot replace /usr/bin/ninja. Torch starts ninja via
 # subprocess (sometimes with an absolute path), so hook Popen and
 # also put a PATH wrapper first for the basename lookup.
-cat > hip-bin/ninja <<'EOF'
+cat > hip-bin/ninja <<EOF
 #!/bin/sh
 args=
 skip=
-for a in "$@"; do
-	if [ -n "$skip" ]; then
+for a in "\$@"; do
+	if [ -n "\$skip" ]; then
 		skip=
 		continue
 	fi
-	case $a in
+	case \$a in
 	-j) skip=1 ;;
 	-j*) ;;
 	--jobs) skip=1 ;;
 	--jobs=*) ;;
-	*) args="$args $a" ;;
+	*) args="\$args \$a" ;;
 	esac
 done
-exec /usr/bin/ninja -j1 $args
+exec /usr/bin/ninja -j%{hip_jobs} \$args
 EOF
 chmod +x hip-bin/ninja
 export PATH="$PWD/hip-bin:$PATH"
-cat > hip-py/sitecustomize.py <<'EOF'
+cat > hip-py/sitecustomize.py <<EOF
 import os
 import subprocess
 _real = subprocess.Popen
@@ -310,7 +367,7 @@ def _popen(args, **kw):
 		a0 = str(args[0])
 		base = os.path.basename(a0)
 		if base == "ninja":
-			out = [a0, "-j1"]
+			out = [a0, "-j%{hip_jobs}"]
 			skip = False
 			for a in list(args)[1:]:
 				if skip:
@@ -335,6 +392,11 @@ for gfx in %{hip_archs}; do
 	rm -rf build hip-w hip-tmp
 	export HIP_ARCHITECTURES="$gfx"
 	export PYTORCH_ROCM_ARCH="$gfx"
+	# setuptools links with host c++. ld.lld then sees the
+	# embedded .hip_fatbin and picks elf32-i386. The HIP
+	# driver must own the shared-object link.
+	export LDSHARED="clang++ -shared -target %{_target_platform} --hip-link --offload-arch=$gfx --rocm-path=%{_prefix}"
+	export LDCXXSHARED="$LDSHARED"
 	# pip wheel (pyproject) does not leave build/_C.so; pull it out of the wheel.
 	python -m pip wheel --no-deps --no-build-isolation --verbose -w hip-w .
 	python -c 'import glob,shutil,sys,zipfile,os; gfx=sys.argv[1]; ws=glob.glob("hip-w/*.whl");

@@ -121,19 +121,161 @@
  struct saturates
 --- a/include/ck_tile/core/arch/amd_buffer_addressing.hpp
 +++ b/include/ck_tile/core/arch/amd_buffer_addressing.hpp
-@@ -82,10 +82,8 @@
+@@ -82,6 +82,9 @@
  // TODO: strict aliasing rule seems fail when reinterpret_cast between vector type
  // (exp_vector_type(xxx))
  
--#define HAS_RAW_BUFFER_BUILTINS                             \
--    __has_builtin(__builtin_amdgcn_raw_buffer_load_b32) &&  \
--        __has_builtin(__builtin_amdgcn_make_buffer_rsrc) && \
--        __has_builtin(__builtin_amdgcn_raw_buffer_store_b32)
-+// clang 23 changed raw_buffer_* builtin vector element types (floatxN -> uint32xN).
-+#define HAS_RAW_BUFFER_BUILTINS 0
++// clang 23 raw_buffer_* builtins use uint32 vectors, not float.
++// bit_cast at the call sites; do not fall back to gfx9 inline asm
++// (illegal on gfx12: v_cmpx dest exec, buffer_store_short soffset 0).
+ #define HAS_RAW_BUFFER_BUILTINS                             \
+     __has_builtin(__builtin_amdgcn_raw_buffer_load_b32) &&  \
+         __has_builtin(__builtin_amdgcn_make_buffer_rsrc) && \
+@@ -113,8 +116,8 @@
+         using mbuf_t = typename impl::buffer_load_trait<16, T>::payload_t;
+ #if HAS_RAW_BUFFER_BUILTINS
+         index_t s_offset                 = i_offset;
+-        reinterpret_cast<mbuf_t&>(value) = __builtin_amdgcn_raw_buffer_load_b128(
+-            cast_to_amdgpu_buffer_rsrc_t(res), v_offset, s_offset, 0);
++        reinterpret_cast<mbuf_t&>(value) = bit_cast<mbuf_t>(__builtin_amdgcn_raw_buffer_load_b128(
++            cast_to_amdgpu_buffer_rsrc_t(res), v_offset, s_offset, 0));
+ #else
+         if constexpr(pre_nop)
+             asm volatile("s_nop 4\n"
+@@ -147,8 +150,8 @@
+         using mbuf_t = typename impl::buffer_load_trait<8, T>::payload_t;
+ #if HAS_RAW_BUFFER_BUILTINS
+         index_t s_offset                 = i_offset;
+-        reinterpret_cast<mbuf_t&>(value) = __builtin_amdgcn_raw_buffer_load_b64(
+-            cast_to_amdgpu_buffer_rsrc_t(res), v_offset, s_offset, 0);
++        reinterpret_cast<mbuf_t&>(value) = bit_cast<mbuf_t>(__builtin_amdgcn_raw_buffer_load_b64(
++            cast_to_amdgpu_buffer_rsrc_t(res), v_offset, s_offset, 0));
+ #else
+         if constexpr(pre_nop)
+             asm volatile("s_nop 4\n"
+@@ -182,8 +185,8 @@
  
  #if HAS_RAW_BUFFER_BUILTINS
- CK_TILE_DEVICE __amdgpu_buffer_rsrc_t cast_to_amdgpu_buffer_rsrc_t(int32x4_t res)
+         index_t s_offset                 = i_offset;
+-        reinterpret_cast<mbuf_t&>(value) = __builtin_amdgcn_raw_buffer_load_b32(
+-            cast_to_amdgpu_buffer_rsrc_t(res), v_offset, s_offset, 0);
++        reinterpret_cast<mbuf_t&>(value) = bit_cast<mbuf_t>(__builtin_amdgcn_raw_buffer_load_b32(
++            cast_to_amdgpu_buffer_rsrc_t(res), v_offset, s_offset, 0));
+ #else
+         if constexpr(pre_nop)
+             asm volatile("s_nop 4\n"
+@@ -217,8 +220,9 @@
+ 
+ #if HAS_RAW_BUFFER_BUILTINS
+         index_t s_offset                 = i_offset;
+-        reinterpret_cast<mbuf_t&>(value) = __builtin_amdgcn_raw_buffer_load_b16(
+-            cast_to_amdgpu_buffer_rsrc_t(res), v_offset, s_offset, 0);
++        reinterpret_cast<mbuf_t&>(value) = bit_cast<mbuf_t>(static_cast<uint32_t>(
++            __builtin_amdgcn_raw_buffer_load_b16(
++                cast_to_amdgpu_buffer_rsrc_t(res), v_offset, s_offset, 0)));
+ #else
+         if constexpr(pre_nop)
+             asm volatile("s_nop 4\n"
+@@ -251,8 +255,9 @@
+         using mbuf_t = typename impl::buffer_load_trait<1, T>::payload_t;
+ #if HAS_RAW_BUFFER_BUILTINS
+         index_t s_offset                 = i_offset;
+-        reinterpret_cast<mbuf_t&>(value) = __builtin_amdgcn_raw_buffer_load_b16(
+-            cast_to_amdgpu_buffer_rsrc_t(res), v_offset, s_offset, 0);
++        reinterpret_cast<mbuf_t&>(value) = bit_cast<mbuf_t>(static_cast<uint32_t>(
++            __builtin_amdgcn_raw_buffer_load_b16(
++                cast_to_amdgpu_buffer_rsrc_t(res), v_offset, s_offset, 0)));
+ #else
+         if constexpr(pre_nop)
+             asm volatile("s_nop 4\n"
+@@ -471,7 +476,7 @@
+                                    index_t /*flag*/ = 1)
+     {
+         static_assert(sizeof(T) == 16);
+-        using mbuf_t = fp32x4_t;
++        using mbuf_t = uint32x4_t;
+ #if HAS_RAW_BUFFER_BUILTINS
+         index_t s_offset = i_offset;
+         __builtin_amdgcn_raw_buffer_store_b128(
+@@ -497,7 +502,7 @@
+                                    index_t /*flag*/ = 1)
+     {
+         static_assert(sizeof(T) == 8);
+-        using mbuf_t = fp32x2_t;
++        using mbuf_t = uint32x2_t;
+ #if HAS_RAW_BUFFER_BUILTINS
+         index_t s_offset = i_offset;
+         __builtin_amdgcn_raw_buffer_store_b64(
+@@ -523,7 +528,7 @@
+                                    index_t /*flag*/ = 1)
+     {
+         static_assert(sizeof(T) == 4);
+-        using mbuf_t = float;
++        using mbuf_t = uint32_t;
+ #if HAS_RAW_BUFFER_BUILTINS
+         index_t s_offset = i_offset;
+         __builtin_amdgcn_raw_buffer_store_b32(
+@@ -549,7 +554,7 @@
+                                    index_t /*flag*/ = 1)
+     {
+         static_assert(sizeof(T) == 2);
+-        using mbuf_t = short;
++        using mbuf_t = uint16_t;
+ #if HAS_RAW_BUFFER_BUILTINS
+         index_t s_offset = i_offset;
+         __builtin_amdgcn_raw_buffer_store_b16(
+@@ -579,7 +584,8 @@
+ #if HAS_RAW_BUFFER_BUILTINS
+         index_t s_offset = i_offset;
+         __builtin_amdgcn_raw_buffer_store_b8(
+-            bit_cast<mbuf_t>(value), cast_to_amdgpu_buffer_rsrc_t(res), v_offset, s_offset, 0);
++            static_cast<uint8_t>(bit_cast<uint32_t>(bit_cast<mbuf_t>(value))),
++            cast_to_amdgpu_buffer_rsrc_t(res), v_offset, s_offset, 0);
+ #else
+         asm volatile("buffer_store_byte %0, %1, %2, 0 offen offset:%3"
+                      :
+@@ -1286,6 +1292,13 @@
+                                               index_t /*flag*/       = 0,
+                                               bool_constant<pre_nop> = {})
+ {
++#if defined(__GFX11__) || defined(__GFX12__)
++    // gfx11/12 have no buffer_load-to-LDS. Load a DWORD then write LDS.
++    (void)pre_nop;
++    uint32_t tmp = __builtin_amdgcn_raw_buffer_load_b32(
++        cast_to_amdgpu_buffer_rsrc_t(rsrc), voffset, ioffset, 0);
++    *static_cast<uint32_t*>(smem) = tmp;
++#else
+     if constexpr(pre_nop)
+         asm volatile("s_nop 4\n"
+                      "buffer_load_dword %1, %2, 0 offen offset:%3 lds"
+@@ -1297,6 +1310,7 @@
+                      : "=r"(smem) /*dummy dependency for smem*/
+                      : "v"(voffset), "s"(rsrc), "n"(ioffset)
+                      : "memory");
++#endif
+ }
+ 
+ CK_TILE_DEVICE void async_buffer_load_fence(index_t cnt = 0)
+@@ -2764,7 +2778,7 @@
+         make_wave_buffer_resource(global_ptr, src_element_space_size * sizeof(T));
+     const index_t global_offset_bytes = is_valid ? global_offset * sizeof(T) : 0x80000000;
+ 
+-#if CK_TILE_USE_AMD_LDS_DIRECT_LOAD_INLINE_ASM
++#if CK_TILE_USE_AMD_LDS_DIRECT_LOAD_INLINE_ASM && !defined(__GFX11__) && !defined(__GFX12__)
+     T* lds_ptr = lds_base_ptr + lds_offset;
+     auto const lds_ptr_sgpr =
+         __builtin_amdgcn_readfirstlane((reinterpret_cast<uintptr_t>(lds_ptr)));
+@@ -2773,6 +2787,10 @@
+                  "v"(global_offset_bytes),
+                  "s"(src_resource)
+                  : "memory");
++#elif defined(__GFX11__) || defined(__GFX12__)
++    uint32_t tmp = __builtin_amdgcn_raw_buffer_load_b32(
++        cast_to_amdgpu_buffer_rsrc_t(src_resource), global_offset_bytes, 0, 0);
++    *(lds_base_ptr + lds_offset) = bit_cast<T>(tmp);
+ #else
+     // LDS pointer must be attributed with the LDS address space.
+     __attribute__((address_space(3))) uint32_t* lds_ptr =
 --- a/include/ck_tile/ops/fmha/pipeline/block_fmha_bwd_pipeline_default_policy.hpp
 +++ b/include/ck_tile/ops/fmha/pipeline/block_fmha_bwd_pipeline_default_policy.hpp
 @@ -370,6 +370,17 @@
@@ -308,3 +450,40 @@
              });
  #else
              ck_tile::ignore = c_vec;
+
+--- a/include/ck_tile/core/arch/arch.hpp
++++ b/include/ck_tile/core/arch/arch.hpp
+@@ -51,8 +51,16 @@
+ 
+ CK_TILE_HOST_DEVICE constexpr index_t get_warp_size()
+ {
+-#if defined(__GFX9__) || !defined(__HIP_DEVICE_COMPILE__)
++    // Host compilation does not see __GFX9__/__GFX12__. CK's default
++    // (!__HIP_DEVICE_COMPILE__ → 64) makes host kentry<256,N> while
++    // wave32 device code emits kentry<128,N>. One-ISA builds pass
++    // -DCK_TILE_WARP_SIZE=32|64 so both sides agree.
++#if defined(CK_TILE_WARP_SIZE)
++    return CK_TILE_WARP_SIZE;
++#elif defined(__GFX9__) || !defined(__HIP_DEVICE_COMPILE__)
+     return 64;
+ #else
+     return 32;
+ #endif
+--- a/include/ck_tile/core/arch/arch_hip.hpp
++++ b/include/ck_tile/core/arch/arch_hip.hpp
+@@ -53,8 +53,16 @@
+ 
+ CK_TILE_HOST_DEVICE constexpr index_t get_warp_size()
+ {
+-#if defined(__GFX9__) || !defined(__HIP_DEVICE_COMPILE__)
++    // Host compilation does not see __GFX9__/__GFX12__. CK's default
++    // (!__HIP_DEVICE_COMPILE__ → 64) makes host kentry<256,N> while
++    // wave32 device code emits kentry<128,N>. One-ISA builds pass
++    // -DCK_TILE_WARP_SIZE=32|64 so both sides agree.
++#if defined(CK_TILE_WARP_SIZE)
++    return CK_TILE_WARP_SIZE;
++#elif defined(__GFX9__) || !defined(__HIP_DEVICE_COMPILE__)
+     return 64;
+ #else
+     return 32;
+ #endif
