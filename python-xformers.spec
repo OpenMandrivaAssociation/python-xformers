@@ -2,9 +2,9 @@
 # CK instance TUs are already multi-GB; -flto on the host objects
 # (and at link of ~640 of them) OOMs the builders.
 %define _disable_lto 1
-# Instance TUs ~1–2 GB; 10 stay inside 64G. Fat dispatchers peaked
-# at 5.3 GB — do not raise this until those are cheaper.
-%global hip_jobs 10
+# Instance TUs are a few GB. Ten parallel hipccs OOM-killed 211
+# gfx906 compiles on the builders. Four stays inside that limit.
+%global hip_jobs 4
 # Official wheels are XFORMERS_BUILD_TYPE=Release with no distro -g3.
 # Keep a little debug (-g1) so a crash is still usable.
 %global optflags %(echo %{optflags} | sed 's/-g3/-g1/g')
