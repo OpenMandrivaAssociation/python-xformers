@@ -3,8 +3,10 @@
 # (and at link of ~640 of them) OOMs the builders.
 %define _disable_lto 1
 # Instance TUs are a few GB. Ten parallel hipccs OOM-killed 211
-# gfx906 compiles on the builders. Four stays inside that limit.
-%global hip_jobs 4
+# gfx906 compiles, and hip_jobs=4 was killed the same way on
+# znver1 and x86_64 (fmha HIP compile, clang frontend signal
+# Killed). Two stays inside that limit.
+%global hip_jobs 2
 # Official wheels are XFORMERS_BUILD_TYPE=Release with no distro -g3.
 # Keep a little debug (-g1) so a crash is still usable.
 %global optflags %(echo %{optflags} | sed 's/-g3/-g1/g')
