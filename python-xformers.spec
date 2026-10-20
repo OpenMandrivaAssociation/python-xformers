@@ -5,8 +5,9 @@
 # Instance TUs are a few GB. Ten parallel hipccs OOM-killed 211
 # gfx906 compiles, and hip_jobs=4 was killed the same way on
 # znver1 and x86_64 (fmha HIP compile, clang frontend signal
-# Killed).
-%global hip_jobs 3
+# Killed). hip_jobs=3 did the same on x86_64 (678813, gfx1200
+# fmha_grouped_infer_bf16 maxk_128, clang frontend Killed).
+%global hip_jobs 2
 # Official wheels are XFORMERS_BUILD_TYPE=Release with no distro -g3.
 # Keep a little debug (-g1) so a crash is still usable.
 %global optflags %(echo %{optflags} | sed 's/-g3/-g1/g')
@@ -75,13 +76,14 @@ table.sort(list, function(a,b) return isa_num(a) < isa_num(b) end)
 rpm.define("hip_archs " .. table.concat(list, " "))
 }
 # Builder rpmbuild limit is 40h. aarch64 678135 (hip_jobs=2) was
-# killed on that hour while compiling gfx906, file 519 of 643.
-# That is one ISA, and the detected set is about eleven, so the
-# full matrix cannot be published. x86_64 gets through one ISA in
-# about 19h at hip_jobs=2. hip_jobs=3 keeps this single ISA inside
-# 40h on aarch64 without going back to the job count that OOMed
-# x86. gfx1200 is the RDNA4 ISA this package is being brought up
-# on. Other GPUs use the CPU _C.so until the compile is cheaper.
+# killed on that hour while compiling gfx906, file 519 of 643, so
+# the full ISA matrix cannot be published. hip_jobs=3 then
+# OOM-killed x86_64 678813 during gfx1200
+# fmha_grouped_infer_bf16 maxk_128 (clang frontend Killed, file
+# 565/643). Two jobs is what fits in builder memory. x86_64 gets
+# through one ISA in about 19h at that job count. gfx1200 is the
+# RDNA4 ISA this package is being brought up on. Other GPUs use
+# the CPU _C.so until the compile is cheaper.
 %global hip_archs gfx1200
 # third_party/composable_kernel_tiled pin from xformers v0.0.35 (.gitmodules).
 # The PyPI sdist omits it; cooker has no composable-kernel package.
