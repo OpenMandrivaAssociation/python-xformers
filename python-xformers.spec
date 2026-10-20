@@ -370,32 +370,70 @@ done
 exec /usr/bin/ninja -j%{hip_jobs} \$args
 EOF
 chmod +x hip-bin/ninja
+# setuptools/torch ignore LDSHARED and call the host compiler
+# with -shared. Without --hip-link, ld.lld treats the embedded
+# .hip_fatbin as elf32-i386 (x86_64 679195).
+cat > hip-bin/clang++ <<EOF
+#!/bin/sh
+shared=
+hip=
+for a in "\$@"; do
+	case \$a in
+	-shared|--shared) shared=1 ;;
+	--hip-link) hip=1 ;;
+	-c) shared= ;;
+	esac
+done
+if [ -n "\$shared" ] && [ -z "\$hip" ]; then
+	arch=
+	for a in \$HIP_ARCHITECTURES; do
+		arch="\$arch --offload-arch=\$a"
+	done
+	set -- --hip-link -target %{_target_platform} --rocm-path=%{_prefix} --rocm-device-lib-path=%{_libdir}/amdgcn/bitcode \$arch "\$@"
+fi
+exec /usr/bin/clang++ "\$@"
+EOF
+chmod +x hip-bin/clang++
+ln -sfn clang++ hip-bin/c++
+ln -sfn clang++ hip-bin/g++
 export PATH="$PWD/hip-bin:$PATH"
 cat > hip-py/sitecustomize.py <<EOF
 import os
 import subprocess
 _real = subprocess.Popen
+_linkers = {"clang++", "c++", "g++", "clang"}
 def _popen(args, **kw):
 	if isinstance(args, (list, tuple)) and args:
-		a0 = str(args[0])
-		base = os.path.basename(a0)
+		argv = [str(a) for a in args]
+		base = os.path.basename(argv[0])
 		if base == "ninja":
-			out = [a0, "-j%{hip_jobs}"]
+			out = [argv[0], "-j%{hip_jobs}"]
 			skip = False
-			for a in list(args)[1:]:
+			for a in argv[1:]:
 				if skip:
 					skip = False
 					continue
-				s = str(a)
-				if s in ("-j", "--jobs"):
+				if a in ("-j", "--jobs"):
 					skip = True
 					continue
-				if s.startswith("-j") and s[2:].isdigit():
+				if a.startswith("-j") and a[2:].isdigit():
 					continue
-				if s.startswith("--jobs="):
+				if a.startswith("--jobs="):
 					continue
 				out.append(a)
-			args = out
+			argv = out
+		elif base in _linkers and "-shared" in argv and "-c" not in argv and "--hip-link" not in argv:
+			extra = [
+				"--hip-link",
+				"-target", "%{_target_platform}",
+				"--rocm-path=%{_prefix}",
+				"--rocm-device-lib-path=%{_libdir}/amdgcn/bitcode",
+			]
+			for a in os.environ.get("HIP_ARCHITECTURES", "").split():
+				if a:
+					extra.append("--offload-arch=" + a)
+			argv = [argv[0]] + extra + argv[1:]
+		args = argv
 	return _real(args, **kw)
 subprocess.Popen = _popen
 EOF
@@ -405,11 +443,12 @@ for gfx in %{hip_archs}; do
 	rm -rf build hip-w hip-tmp
 	export HIP_ARCHITECTURES="$gfx"
 	export PYTORCH_ROCM_ARCH="$gfx"
-	# setuptools links with host c++. ld.lld then sees the
-	# embedded .hip_fatbin and picks elf32-i386. The HIP
-	# driver must own the shared-object link.
+	# PATH and sitecustomize inject --hip-link. LDSHARED covers
+	# a build path that still honours it.
 	export LDSHARED="clang++ -shared -target %{_target_platform} --hip-link --offload-arch=$gfx --rocm-path=%{_prefix}"
 	export LDCXXSHARED="$LDSHARED"
+	export CXX="$PWD/hip-bin/clang++"
+	export CC=clang
 	# pip wheel (pyproject) does not leave build/_C.so; pull it out of the wheel.
 	python -m pip wheel --no-deps --no-build-isolation --verbose -w hip-w .
 	python -c 'import glob,shutil,sys,zipfile,os; gfx=sys.argv[1]; ws=glob.glob("hip-w/*.whl");
