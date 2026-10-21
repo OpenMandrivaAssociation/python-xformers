@@ -180,6 +180,12 @@ end
 # torch 2.13 AutogradState.h uses C++20 bit-field default initializers;
 # hipcc -Werror turns the c++17 diagnostic into a hard error.
 sed -i 's/-std=c++17/-std=c++20/g' setup.py
+# hipcc defaults to device clang -cc1 -flto=full. x86_64 679321
+# compiled all 643 gfx1200 files, then ld.lld selected elf32-i386
+# even though hip-bin/clang++ was invoked with --hip-link.
+# -fno-offload-lto leaves a finished AMDGPU code object in each
+# TU, and those link as ordinary host objects.
+sed -i 's/"-DCK_TILE_FMHA_FWD_FAST_EXP2=1",/"-DCK_TILE_FMHA_FWD_FAST_EXP2=1", "-fno-offload-lto",/' setup.py
 # clang 23 is stricter than the -Werror HIP flags xformers ships.
 # -Wc++11-narrowing is a hard error here and trips on signed bf16.
 sed -i '/"-Werror",/d; /"-Wc++11-narrowing",/d' setup.py
@@ -371,8 +377,9 @@ exec /usr/bin/ninja -j%{hip_jobs} \$args
 EOF
 chmod +x hip-bin/ninja
 # setuptools/torch ignore LDSHARED and call the host compiler
-# with -shared. Without --hip-link, ld.lld treats the embedded
-# .hip_fatbin as elf32-i386 (x86_64 679195).
+# with -shared. --hip-link is still required for the HIP link.
+# It is not sufficient on its own: 679321 passed it and ld.lld
+# still selected elf32-i386 while device LTO was on.
 cat > hip-bin/clang++ <<EOF
 #!/bin/sh
 shared=
@@ -449,6 +456,7 @@ for gfx in %{hip_archs}; do
 	export LDCXXSHARED="$LDSHARED"
 	export CXX="$PWD/hip-bin/clang++"
 	export CC=clang
+	export HIPCC_COMPILE_FLAGS_APPEND="-fno-offload-lto"
 	# pip wheel (pyproject) does not leave build/_C.so; pull it out of the wheel.
 	python -m pip wheel --no-deps --no-build-isolation --verbose -w hip-w .
 	python -c 'import glob,shutil,sys,zipfile,os; gfx=sys.argv[1]; ws=glob.glob("hip-w/*.whl");
